@@ -49,7 +49,6 @@
     overflow: hidden;
   }
 
-  /* Decorative glow */
   .card::before {
     content: "";
     position: absolute;
@@ -94,14 +93,12 @@
   }
   .quote-author::before { content: "— "; opacity: 0.7; }
 
-  /* Fade-in animation on new quote */
   .animate { animation: fadeUp 0.5s ease both; }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
-  /* Loading skeleton */
   .skeleton {
     height: 1.2em;
     border-radius: 8px;
@@ -134,6 +131,12 @@
   button:active:not(:disabled) { transform: scale(0.96); }
   button:disabled { cursor: not-allowed; }
 
+  /* Visible focus ring for keyboard users */
+  button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
   .btn-primary {
     position: relative;
     overflow: hidden;
@@ -154,7 +157,6 @@
     box-shadow: none;
   }
 
-  /* Cooldown progress bar that fills up as the button recharges */
   .btn-primary .progress {
     position: absolute;
     left: 0;
@@ -210,18 +212,18 @@
     </div>
 
     <div class="actions">
-      <button class="btn-primary" id="newQuoteBtn">
-        <span id="btnIcon">✨</span>
+      <button class="btn-primary" id="newQuoteBtn" type="button">
+        <span id="btnIcon" aria-hidden="true">✨</span>
         <span id="btnLabel">New Quote</span>
-        <span class="progress" id="btnProgress"></span>
+        <span class="progress" id="btnProgress" aria-hidden="true"></span>
       </button>
 
       <span class="spacer"></span>
 
-      <button class="icon-btn" id="copyBtn" title="Copy quote" aria-label="Copy quote">📋</button>
+      <button class="icon-btn" id="copyBtn" type="button" title="Copy quote" aria-label="Copy quote">📋</button>
     </div>
 
-    <p class="status" id="status"></p>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
   </main>
 
 <script>
@@ -229,12 +231,44 @@
   "use strict";
 
   /* ------------------------------------------------------------------
-     CONFIG
+     Multi-API chain — tries each in order until one returns a quote.
+     All three are free and require no API key.
   ------------------------------------------------------------------ */
-  const API_URL = "https://dummyjson.com/quotes/random";
+  const API_ENDPOINTS = [
+    {
+      name: "QuoteSlate",
+      url: "https://quoteslate.vercel.app/api/quotes/random",
+      parse: (data) => {
+        const raw = Array.isArray(data) ? data[0] : (data.data ?? data);
+        return {
+          text:   raw.quote ?? raw.quoteText ?? raw.content ?? "",
+          author: raw.author ?? raw.quoteAuthor ?? "Unknown",
+          id:     raw.id ?? raw._id ?? null,
+        };
+      },
+    },
+    {
+      name: "DummyJSON",
+      url: "https://dummyjson.com/quotes/random",
+      parse: (data) => ({
+        text:   data.quote ?? "",
+        author: data.author ?? "Unknown",
+        id:     data.id ?? null,
+      }),
+    },
+    {
+      name: "Quotable",
+      url: "https://api.quotable.io/random",
+      parse: (data) => ({
+        text:   data.content ?? "",
+        author: data.author ?? "Unknown",
+        id:     data._id ?? null,
+      }),
+    },
+  ];
 
-  /** Seconds the user must wait between quotes (anti-spam). */
   const COOLDOWN_SECONDS = 4;
+  const MAX_ATTEMPTS_PER_API = 3;
 
   const els = {
     box:      document.getElementById("quoteBox"),
@@ -250,21 +284,31 @@
 
   let current = { text: "", author: "" };
   let lastId = null;
+  let isFetching = false;
+  let cooldownTimer = null;
+  let cooldownEnd = 0;
 
-  /* App state */
-  let isFetching = false;     // request in flight
-  let cooldownTimer = null;   // interval id for the cooldown ticker
-  let cooldownEnd = 0;        // timestamp when the cooldown finishes
-
-  /* Local backup so the app never shows an empty screen */
   const FALLBACKS = [
-    { quote: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
-    { quote: "In the middle of difficulty lies opportunity.", author: "Albert Einstein" },
-    { quote: "Whether you think you can or you think you can't, you're right.", author: "Henry Ford" },
-    { quote: "Simplicity is the ultimate sophistication.", author: "Leonardo da Vinci" },
-    { quote: "It always seems impossible until it's done.", author: "Nelson Mandela" },
-    { quote: "The best time to plant a tree was 20 years ago. The second best time is now.", author: "Chinese Proverb" },
-    { quote: "Do what you can, with what you have, where you are.", author: "Theodore Roosevelt" },
+    { text: "You have power over your mind — not outside events. Realize this, and you will find strength.", author: "Marcus Aurelius" },
+    { text: "It is not that we have a short time to live, but that we waste much of it.", author: "Seneca" },
+    { text: "First say to yourself what you would be; and then do what you have to do.", author: "Epictetus" },
+    { text: "The impediment to action advances action. What stands in the way becomes the way.", author: "Marcus Aurelius" },
+    { text: "We are what we repeatedly do. Excellence, then, is not an act, but a habit.", author: "Will Durant" },
+    { text: "The only true wisdom is in knowing you know nothing.", author: "Socrates" },
+    { text: "He who has a why to live can bear almost any how.", author: "Friedrich Nietzsche" },
+    { text: "The best way to predict the future is to invent it.", author: "Alan Kay" },
+    { text: "Simplicity is the soul of efficiency.", author: "Austin Freeman" },
+    { text: "Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.", author: "Antoine de Saint-Exupéry" },
+    { text: "Make it work, make it right, make it fast.", author: "Kent Beck" },
+    { text: "Talk is cheap. Show me the code.", author: "Linus Torvalds" },
+    { text: "The most dangerous phrase in the language is, 'We've always done it this way.'", author: "Grace Hopper" },
+    { text: "Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", author: "Martin Fowler" },
+    { text: "The secret of getting ahead is getting started.", author: "Mark Twain" },
+    { text: "Do not go where the path may lead, go instead where there is no path and leave a trail.", author: "Ralph Waldo Emerson" },
+    { text: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius" },
+    { text: "The wound is the place where the Light enters you.", author: "Rumi" },
+    { text: "Start where you are. Use what you have. Do what you can.", author: "Arthur Ashe" },
+    { text: "Courage is not the absence of fear, but the triumph over it.", author: "Nelson Mandela" },
   ];
 
   /* ------------------------- UI helpers ----------------------------- */
@@ -276,13 +320,15 @@
 
   const isCoolingDown = () => Date.now() < cooldownEnd;
 
-  /** Locks the button in the "fetching" look. */
   const setLoading = () => {
     els.btn.disabled = true;
     els.icon.textContent = "⏳";
     els.icon.className = "spin";
     els.label.textContent = "Loading…";
     els.progress.style.width = "0%";
+
+    // Clear current so copying during load can't grab the previous quote
+    current = { text: "", author: "" };
 
     els.box.classList.remove("animate");
     els.text.innerHTML =
@@ -292,7 +338,6 @@
     setStatus("Fetching a fresh quote…");
   };
 
-  /** Unlocks the button. */
   const setReady = () => {
     els.btn.disabled = false;
     els.icon.textContent = "✨";
@@ -301,11 +346,6 @@
     els.progress.style.width = "0%";
   };
 
-  /**
-   * Starts the anti-spam cooldown.
-   * While active the button is disabled and shows a live countdown,
-   * with the little progress bar filling up until it's ready again.
-   */
   function startCooldown() {
     clearInterval(cooldownTimer);
 
@@ -323,7 +363,6 @@
         cooldownTimer = null;
         cooldownEnd = 0;
         setReady();
-        // Clear the transient "loaded" message, but keep errors visible
         if (!els.status.classList.contains("error")) setStatus("");
         return;
       }
@@ -337,7 +376,6 @@
     };
 
     tick();
-    // 100 ms ticks keep the countdown and bar smooth without busy-looping
     cooldownTimer = setInterval(tick, 100);
   }
 
@@ -346,7 +384,6 @@
     els.text.textContent = quote.text;
     els.author.textContent = quote.author || "Unknown";
 
-    // Re-trigger the CSS animation
     els.box.classList.remove("animate");
     void els.box.offsetWidth;
     els.box.classList.add("animate");
@@ -354,60 +391,82 @@
 
   /* ---------------------------- Fetching ---------------------------- */
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function tryApi(api) {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_API; attempt++) {
+      try {
+        const res = await fetch(api.url, { headers: { Accept: "application/json" } });
+        if (!res.ok) throw new Error(`${api.name}: HTTP ${res.status}`);
+
+        const data = await res.json();
+        const quote = api.parse(data);
+
+        if (!quote.text) throw new Error(`${api.name}: empty quote text`);
+
+        if (quote.id === null || quote.id !== lastId) {
+          return quote;
+        }
+
+        await sleep(120);
+      } catch (err) {
+        console.warn(`[${api.name}] attempt ${attempt + 1} failed:`, err.message);
+        break;
+      }
+    }
+    return null;
+  }
+
   async function fetchQuote() {
-    // Guard: never fire while busy or cooling down
     if (isFetching || isCoolingDown()) return;
 
     isFetching = true;
     setLoading();
 
     try {
-      const res = await fetch(API_URL, { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-
-      // Normalize different API response shapes
-      const quote = {
-        text:   data.quote ?? data.content ?? data.q ?? "",
-        author: data.author ?? data.a ?? "Unknown",
-        id:     data.id ?? null,
-      };
-
-      if (!quote.text) throw new Error("Empty quote in response");
-
-      // Avoid repeating the exact same quote twice in a row
-      if (quote.id !== null && quote.id === lastId) {
-        isFetching = false;
-        return fetchQuote();
+      let quote = null;
+      for (const api of API_ENDPOINTS) {
+        quote = await tryApi(api);
+        if (quote) break;
       }
-      lastId = quote.id;
 
-      render(quote);
-      setStatus("Quote loaded ✓", "success");
+      if (quote) {
+        lastId = quote.id;
+        render(quote);
+        setStatus("Quote loaded ✓", "success");
+      } else {
+        const fb = FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
+        render(fb);
+        setStatus("⚠ All APIs unreachable — showing a saved quote.", "error");
+      }
     } catch (err) {
-      console.error("Quote fetch failed:", err);
-
+      console.error("Unexpected error:", err);
       const fb = FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
       render(fb);
-      setStatus("⚠ Offline / API unavailable — showing a saved quote.", "error");
+      setStatus("⚠ Unexpected error — showing a saved quote.", "error");
     } finally {
       isFetching = false;
-      startCooldown(); // lock the button for a few seconds
+      startCooldown();
     }
   }
 
   /* ---------------------------- Actions ----------------------------- */
 
   async function copyQuote() {
-    if (!current.text) return;
+    if (!current.text) {
+      setStatus("Nothing to copy yet — load a quote first.", "error");
+      setTimeout(() => {
+        if (!isCoolingDown() && !els.status.classList.contains("error")) setStatus("");
+      }, 2000);
+      return;
+    }
+
     const payload = `"${current.text}" — ${current.author}`;
 
     try {
       await navigator.clipboard.writeText(payload);
       setStatus("Copied to clipboard ✓", "success");
     } catch {
-      // Fallback for older browsers / non-secure contexts
       const ta = document.createElement("textarea");
       ta.value = payload;
       ta.style.position = "fixed";
@@ -429,18 +488,34 @@
   els.btn.addEventListener("click", fetchQuote);
   els.copy.addEventListener("click", copyQuote);
 
-  // Space / Enter also works — but respects the same cooldown
+  /* Global shortcut: Space / Enter fires a new quote — but ONLY when the
+     focus isn't already on an interactive element (button, link, input,
+     textarea, select, or contenteditable). This keeps keyboard navigation
+     working: focusing the Copy button and pressing Enter/Space copies the
+     quote instead of being hijacked by this shortcut. */
   document.addEventListener("keydown", (e) => {
-    const tag = document.activeElement.tagName;
-    if ((e.code === "Space" || e.key === "Enter") && tag !== "INPUT" && tag !== "TEXTAREA") {
-      e.preventDefault();
-      fetchQuote(); // fetchQuote() already bails out during cooldown
-    }
+    if (e.code !== "Space" && e.key !== "Enter") return;
+
+    const el = document.activeElement;
+    if (!el) return;
+
+    const tag = el.tagName;
+    const isInteractive =
+      tag === "BUTTON" ||
+      tag === "A" ||
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      el.isContentEditable;
+
+    if (isInteractive) return;
+
+    e.preventDefault();
+    fetchQuote();
   });
 
-  // Load one immediately on start (this also kicks off the first cooldown)
   fetchQuote();
 })();
 </script>
 </body>
-  </html>
+</html>
