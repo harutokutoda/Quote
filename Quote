@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Random Quote Generator</title>
+<style>
+  :root {
+    --bg-1: #0f0c29;
+    --bg-2: #302b63;
+    --bg-3: #24243e;
+    --accent: #7f5af0;
+    --accent-2: #2cb67d;
+    --text: #fffffe;
+    --muted: #94a1b2;
+    --card: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 1.5rem;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    color: var(--text);
+    background: linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3));
+    background-size: 300% 300%;
+    animation: drift 18s ease infinite;
+  }
+
+  @keyframes drift {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+  }
+
+  .card {
+    width: min(680px, 100%);
+    padding: 2.75rem 2.5rem 2rem;
+    border-radius: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Decorative glow */
+  .card::before {
+    content: "";
+    position: absolute;
+    top: -60%;
+    right: -30%;
+    width: 380px;
+    height: 380px;
+    background: radial-gradient(circle, rgba(127, 90, 240, 0.35), transparent 70%);
+    pointer-events: none;
+  }
+
+  .mark {
+    font-size: 5rem;
+    line-height: 0.6;
+    color: var(--accent);
+    opacity: 0.55;
+    font-family: Georgia, serif;
+    user-select: none;
+  }
+
+  .quote-box {
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin: 0.5rem 0 1.5rem;
+  }
+
+  .quote-text {
+    font-size: clamp(1.2rem, 3.2vw, 1.6rem);
+    line-height: 1.55;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+
+  .quote-author {
+    margin-top: 1.25rem;
+    font-size: 1rem;
+    color: var(--accent-2);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .quote-author::before { content: "— "; opacity: 0.7; }
+
+  /* Fade-in animation on new quote */
+  .animate { animation: fadeUp 0.5s ease both; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Loading skeleton */
+  .skeleton {
+    height: 1.2em;
+    border-radius: 8px;
+    background: linear-gradient(90deg, rgba(255,255,255,.08) 25%, rgba(255,255,255,.18) 50%, rgba(255,255,255,.08) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s infinite;
+    margin-bottom: 0.6rem;
+  }
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+  }
+
+  button, .icon-btn {
+    font: inherit;
+    cursor: pointer;
+    border: none;
+    border-radius: 12px;
+    transition: transform 0.15s ease, opacity 0.2s ease, background 0.2s ease;
+  }
+  button:active:not(:disabled) { transform: scale(0.96); }
+  button:disabled { cursor: not-allowed; }
+
+  .btn-primary {
+    position: relative;
+    overflow: hidden;
+    padding: 0.85rem 1.6rem;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent), #5a3fd6);
+    box-shadow: 0 8px 22px rgba(127, 90, 240, 0.35);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 172px;
+    justify-content: center;
+  }
+  .btn-primary:hover:not(:disabled) { transform: translateY(-2px); }
+  .btn-primary:disabled {
+    filter: saturate(0.55) brightness(0.85);
+    box-shadow: none;
+  }
+
+  /* Cooldown progress bar that fills up as the button recharges */
+  .btn-primary .progress {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    width: 0%;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 0 3px 3px 0;
+    transition: width 0.2s linear;
+  }
+
+  .spacer { flex: 1 1 auto; }
+
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 1.1rem;
+  }
+  .icon-btn:hover { background: rgba(255, 255, 255, 0.16); }
+
+  .status {
+    min-height: 1.25rem;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .status.error { color: #ff8f8f; }
+  .status.success { color: var(--accent-2); }
+
+  .spin { display: inline-block; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 480px) {
+    .card { padding: 2rem 1.5rem 1.5rem; border-radius: 18px; }
+    .mark { font-size: 3.5rem; }
+    .btn-primary { min-width: 0; flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+
+  <main class="card">
+    <div class="mark" aria-hidden="true">&ldquo;</div>
+
+    <div class="quote-box" id="quoteBox" aria-live="polite">
+      <p class="quote-text" id="quoteText">Click “New Quote” to get inspired.</p>
+      <p class="quote-author" id="quoteAuthor"></p>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="newQuoteBtn">
+        <span id="btnIcon">✨</span>
+        <span id="btnLabel">New Quote</span>
+        <span class="progress" id="btnProgress"></span>
+      </button>
+
+      <span class="spacer"></span>
+
+      <button class="icon-btn" id="copyBtn" title="Copy quote" aria-label="Copy quote">📋</button>
+    </div>
+
+    <p class="status" id="status"></p>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ------------------------------------------------------------------
+     CONFIG
+  ------------------------------------------------------------------ */
+  const API_URL = "https://dummyjson.com/quotes/random";
+
+  /** Seconds the user must wait between quotes (anti-spam). */
+  const COOLDOWN_SECONDS = 4;
+
+  const els = {
+    box:      document.getElementById("quoteBox"),
+    text:     document.getElementById("quoteText"),
+    author:   document.getElementById("quoteAuthor"),
+    btn:      document.getElementById("newQuoteBtn"),
+    icon:     document.getElementById("btnIcon"),
+    label:    document.getElementById("btnLabel"),
+    progress: document.getElementById("btnProgress"),
+    copy:     document.getElementById("copyBtn"),
+    status:   document.getElementById("status"),
+  };
+
+  let current = { text: "", author: "" };
+  let lastId = null;
+
+  /* App state */
+  let isFetching = false;     // request in flight
+  let cooldownTimer = null;   // interval id for the cooldown ticker
+  let cooldownEnd = 0;        // timestamp when the cooldown finishes
+
+  /* Local backup so the app never shows an empty screen */
+  const FALLBACKS = [
+    { quote: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
+    { quote: "In the middle of difficulty lies opportunity.", author: "Albert Einstein" },
+    { quote: "Whether you think you can or you think you can't, you're right.", author: "Henry Ford" },
+    { quote: "Simplicity is the ultimate sophistication.", author: "Leonardo da Vinci" },
+    { quote: "It always seems impossible until it's done.", author: "Nelson Mandela" },
+    { quote: "The best time to plant a tree was 20 years ago. The second best time is now.", author: "Chinese Proverb" },
+    { quote: "Do what you can, with what you have, where you are.", author: "Theodore Roosevelt" },
+  ];
+
+  /* ------------------------- UI helpers ----------------------------- */
+
+  const setStatus = (msg, type = "") => {
+    els.status.textContent = msg;
+    els.status.className = "status" + (type ? " " + type : "");
+  };
+
+  const isCoolingDown = () => Date.now() < cooldownEnd;
+
+  /** Locks the button in the "fetching" look. */
+  const setLoading = () => {
+    els.btn.disabled = true;
+    els.icon.textContent = "⏳";
+    els.icon.className = "spin";
+    els.label.textContent = "Loading…";
+    els.progress.style.width = "0%";
+
+    els.box.classList.remove("animate");
+    els.text.innerHTML =
+      '<span class="skeleton" style="width:100%"></span>' +
+      '<span class="skeleton" style="width:70%"></span>';
+    els.author.textContent = "";
+    setStatus("Fetching a fresh quote…");
+  };
+
+  /** Unlocks the button. */
+  const setReady = () => {
+    els.btn.disabled = false;
+    els.icon.textContent = "✨";
+    els.icon.className = "";
+    els.label.textContent = "New Quote";
+    els.progress.style.width = "0%";
+  };
+
+  /**
+   * Starts the anti-spam cooldown.
+   * While active the button is disabled and shows a live countdown,
+   * with the little progress bar filling up until it's ready again.
+   */
+  function startCooldown() {
+    clearInterval(cooldownTimer);
+
+    cooldownEnd = Date.now() + COOLDOWN_SECONDS * 1000;
+    els.btn.disabled = true;
+    els.icon.textContent = "⏳";
+    els.icon.className = "";
+    els.progress.style.width = "0%";
+
+    const tick = () => {
+      const msLeft = cooldownEnd - Date.now();
+
+      if (msLeft <= 0) {
+        clearInterval(cooldownTimer);
+        cooldownTimer = null;
+        cooldownEnd = 0;
+        setReady();
+        // Clear the transient "loaded" message, but keep errors visible
+        if (!els.status.classList.contains("error")) setStatus("");
+        return;
+      }
+
+      const secsLeft = Math.ceil(msLeft / 1000);
+      els.label.textContent = `Wait ${secsLeft}s`;
+
+      const elapsed = COOLDOWN_SECONDS * 1000 - msLeft;
+      els.progress.style.width =
+        Math.min(100, (elapsed / (COOLDOWN_SECONDS * 1000)) * 100) + "%";
+    };
+
+    tick();
+    // 100 ms ticks keep the countdown and bar smooth without busy-looping
+    cooldownTimer = setInterval(tick, 100);
+  }
+
+  const render = (quote) => {
+    current = quote;
+    els.text.textContent = quote.text;
+    els.author.textContent = quote.author || "Unknown";
+
+    // Re-trigger the CSS animation
+    els.box.classList.remove("animate");
+    void els.box.offsetWidth;
+    els.box.classList.add("animate");
+  };
+
+  /* ---------------------------- Fetching ---------------------------- */
+
+  async function fetchQuote() {
+    // Guard: never fire while busy or cooling down
+    if (isFetching || isCoolingDown()) return;
+
+    isFetching = true;
+    setLoading();
+
+    try {
+      const res = await fetch(API_URL, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+
+      // Normalize different API response shapes
+      const quote = {
+        text:   data.quote ?? data.content ?? data.q ?? "",
+        author: data.author ?? data.a ?? "Unknown",
+        id:     data.id ?? null,
+      };
+
+      if (!quote.text) throw new Error("Empty quote in response");
+
+      // Avoid repeating the exact same quote twice in a row
+      if (quote.id !== null && quote.id === lastId) {
+        isFetching = false;
+        return fetchQuote();
+      }
+      lastId = quote.id;
+
+      render(quote);
+      setStatus("Quote loaded ✓", "success");
+    } catch (err) {
+      console.error("Quote fetch failed:", err);
+
+      const fb = FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
+      render(fb);
+      setStatus("⚠ Offline / API unavailable — showing a saved quote.", "error");
+    } finally {
+      isFetching = false;
+      startCooldown(); // lock the button for a few seconds
+    }
+  }
+
+  /* ---------------------------- Actions ----------------------------- */
+
+  async function copyQuote() {
+    if (!current.text) return;
+    const payload = `"${current.text}" — ${current.author}`;
+
+    try {
+      await navigator.clipboard.writeText(payload);
+      setStatus("Copied to clipboard ✓", "success");
+    } catch {
+      // Fallback for older browsers / non-secure contexts
+      const ta = document.createElement("textarea");
+      ta.value = payload;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      setStatus("Copied to clipboard ✓", "success");
+    }
+
+    setTimeout(() => {
+      if (!isCoolingDown() && !els.status.classList.contains("error")) setStatus("");
+    }, 2000);
+  }
+
+  /* ---------------------------- Wiring ------------------------------ */
+
+  els.btn.addEventListener("click", fetchQuote);
+  els.copy.addEventListener("click", copyQuote);
+
+  // Space / Enter also works — but respects the same cooldown
+  document.addEventListener("keydown", (e) => {
+    const tag = document.activeElement.tagName;
+    if ((e.code === "Space" || e.key === "Enter") && tag !== "INPUT" && tag !== "TEXTAREA") {
+      e.preventDefault();
+      fetchQuote(); // fetchQuote() already bails out during cooldown
+    }
+  });
+
+  // Load one immediately on start (this also kicks off the first cooldown)
+  fetchQuote();
+})();
+</script>
+</body>
+  </html>
