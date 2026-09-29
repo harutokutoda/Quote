@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="A fast, accessible random quote generator." />
 <title>Random Quote Generator</title>
 <style>
   :root {
@@ -15,12 +16,28 @@
     --muted: #94a1b2;
     --card: rgba(255, 255, 255, 0.06);
     --border: rgba(255, 255, 255, 0.12);
+    --error: #ff8f8f;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  [hidden] { display: none !important; }
+
+  /* Visually hidden but available to assistive tech */
+  .sr-only {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
   body {
     min-height: 100vh;
+    min-height: 100dvh;
     display: grid;
     place-items: center;
     padding: 1.5rem;
@@ -77,6 +94,9 @@
     margin: 0.5rem 0 1.5rem;
   }
 
+  #quoteWrap { transition: opacity 0.2s ease; }
+  .quote-box.is-loading #quoteWrap { opacity: 0.4; }
+
   .quote-text {
     font-size: clamp(1.2rem, 3.2vw, 1.6rem);
     line-height: 1.55;
@@ -100,6 +120,7 @@
   }
 
   .skeleton {
+    display: block;
     height: 1.2em;
     border-radius: 8px;
     background: linear-gradient(90deg, rgba(255,255,255,.08) 25%, rgba(255,255,255,.18) 50%, rgba(255,255,255,.08) 75%);
@@ -121,17 +142,14 @@
     padding-top: 1.5rem;
   }
 
-  button, .icon-btn {
+  button {
     font: inherit;
     cursor: pointer;
     border: none;
     border-radius: 12px;
     transition: transform 0.15s ease, opacity 0.2s ease, background 0.2s ease;
   }
-  button:active:not(:disabled) { transform: scale(0.96); }
-  button:disabled { cursor: not-allowed; }
 
-  /* Visible focus ring for keyboard users */
   button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
@@ -151,10 +169,15 @@
     min-width: 172px;
     justify-content: center;
   }
-  .btn-primary:hover:not(:disabled) { transform: translateY(-2px); }
-  .btn-primary:disabled {
+
+  .btn-primary:hover:not([aria-disabled="true"]) { transform: translateY(-2px); }
+  .btn-primary:active:not([aria-disabled="true"]) { transform: scale(0.96); }
+
+  .btn-primary[aria-disabled="true"] {
+    cursor: not-allowed;
     filter: saturate(0.55) brightness(0.85);
     box-shadow: none;
+    transform: none;
   }
 
   .btn-primary .progress {
@@ -188,7 +211,7 @@
     font-size: 0.85rem;
     color: var(--muted);
   }
-  .status.error { color: #ff8f8f; }
+  .status.error   { color: var(--error); }
   .status.success { color: var(--accent-2); }
 
   .spin { display: inline-block; animation: spin 0.9s linear infinite; }
@@ -199,16 +222,35 @@
     .mark { font-size: 3.5rem; }
     .btn-primary { min-width: 0; flex: 1 1 auto; }
   }
+
+  /* Respect users who ask for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
 
   <main class="card">
+    <h1 class="sr-only">Random Quote Generator</h1>
+
     <div class="mark" aria-hidden="true">&ldquo;</div>
 
-    <div class="quote-box" id="quoteBox" aria-live="polite">
-      <p class="quote-text" id="quoteText">Click “New Quote” to get inspired.</p>
-      <p class="quote-author" id="quoteAuthor"></p>
+    <div class="quote-box" id="quoteBox" aria-live="polite" aria-atomic="true" aria-busy="false">
+      <div id="skeleton" hidden aria-hidden="true">
+        <span class="skeleton" style="width:100%"></span>
+        <span class="skeleton" style="width:70%"></span>
+      </div>
+
+      <div id="quoteWrap">
+        <p class="quote-text" id="quoteText">Click “New Quote” to get inspired.</p>
+        <p class="quote-author" id="quoteAuthor"></p>
+      </div>
     </div>
 
     <div class="actions">
@@ -220,7 +262,9 @@
 
       <span class="spacer"></span>
 
-      <button class="icon-btn" id="copyBtn" type="button" title="Copy quote" aria-label="Copy quote">📋</button>
+      <button class="icon-btn" id="copyBtn" type="button" title="Copy quote" aria-label="Copy quote">
+        <span aria-hidden="true">📋</span>
+      </button>
     </div>
 
     <p class="status" id="status" role="status" aria-live="polite"></p>
@@ -231,18 +275,22 @@
   "use strict";
 
   /* ------------------------------------------------------------------
-     Multi-API chain — tries each in order until one returns a quote.
-     All three are free and require no API key.
+     Multi-API chain — tried in order until one returns a usable quote.
+     All are free and require no API key.
+
+     parse() is defensive: unknown / malformed payloads return {} and are
+     treated as a failure for that API rather than throwing.
   ------------------------------------------------------------------ */
   const API_ENDPOINTS = [
     {
       name: "QuoteSlate",
       url: "https://quoteslate.vercel.app/api/quotes/random",
-      parse: (data) => {
-        const raw = Array.isArray(data) ? data[0] : (data.data ?? data);
+      parse(data) {
+        const raw = Array.isArray(data) ? data[0] : (data && data.data ? data.data : data);
+        if (!raw || typeof raw !== "object") return {};
         return {
           text:   raw.quote ?? raw.quoteText ?? raw.content ?? "",
-          author: raw.author ?? raw.quoteAuthor ?? "Unknown",
+          author: raw.author ?? raw.quoteAuthor ?? "",
           id:     raw.id ?? raw._id ?? null,
         };
       },
@@ -250,28 +298,54 @@
     {
       name: "DummyJSON",
       url: "https://dummyjson.com/quotes/random",
-      parse: (data) => ({
-        text:   data.quote ?? "",
-        author: data.author ?? "Unknown",
-        id:     data.id ?? null,
-      }),
+      parse(data) {
+        if (!data || typeof data !== "object") return {};
+        return {
+          text:   data.quote ?? "",
+          author: data.author ?? "",
+          id:     data.id ?? null,
+        };
+      },
     },
     {
+      name: "RealInspire",
+      url: "https://api.realinspire.live/v1/quotes/random",
+      parse(data) {
+        const raw = Array.isArray(data) ? data[0] : data;
+        if (!raw || typeof raw !== "object") return {};
+        return {
+          text:   raw.content ?? raw.quote ?? "",
+          author: raw.author ?? "",
+          id:     raw._id ?? raw.id ?? null,
+        };
+      },
+    },
+    {
+      // Historically flaky — kept as a last-resort attempt only.
       name: "Quotable",
       url: "https://api.quotable.io/random",
-      parse: (data) => ({
-        text:   data.content ?? "",
-        author: data.author ?? "Unknown",
-        id:     data._id ?? null,
-      }),
+      parse(data) {
+        if (!data || typeof data !== "object") return {};
+        return {
+          text:   data.content ?? "",
+          author: data.author ?? "",
+          id:     data._id ?? null,
+        };
+      },
     },
   ];
 
-  const COOLDOWN_SECONDS = 4;
-  const MAX_ATTEMPTS_PER_API = 3;
+  const COOLDOWN_SECONDS      = 4;    // after a successful load
+  const FAILURE_COOLDOWN_SEC  = 2;    // after a fallback render
+  const MAX_ATTEMPTS_PER_API  = 2;
+  const REQUEST_TIMEOUT_MS    = 3500; // per individual HTTP request
+  const RETRY_BASE_DELAY_MS   = 300;  // exponential backoff base
+  const TOTAL_BUDGET_MS       = 9000; // wall-clock cap for the whole chain
 
   const els = {
     box:      document.getElementById("quoteBox"),
+    wrap:     document.getElementById("quoteWrap"),
+    skeleton: document.getElementById("skeleton"),
     text:     document.getElementById("quoteText"),
     author:   document.getElementById("quoteAuthor"),
     btn:      document.getElementById("newQuoteBtn"),
@@ -282,11 +356,12 @@
     status:   document.getElementById("status"),
   };
 
-  let current = { text: "", author: "" };
-  let lastId = null;
-  let isFetching = false;
+  let current      = { text: "", author: "" };
+  let lastKey      = null;   // "<apiName>:<id>" — scoped so IDs can't collide
+  let lastFallback = -1;
+  let isFetching   = false;
   let cooldownTimer = null;
-  let cooldownEnd = 0;
+  let cooldownEnd   = 0;
 
   const FALLBACKS = [
     { text: "You have power over your mind — not outside events. Realize this, and you will find strength.", author: "Marcus Aurelius" },
@@ -311,49 +386,100 @@
     { text: "Courage is not the absence of fear, but the triumph over it.", author: "Nelson Mandela" },
   ];
 
-  /* ------------------------- UI helpers ----------------------------- */
+  /* ------------------------- small utilities ------------------------ */
 
-  const setStatus = (msg, type = "") => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const pickFallback = () => {
+    if (FALLBACKS.length === 1) return FALLBACKS[0];
+    let i;
+    do { i = Math.floor(Math.random() * FALLBACKS.length); }
+    while (i === lastFallback);
+    lastFallback = i;
+    return FALLBACKS[i];
+  };
+
+  /* --------------------------- status line --------------------------
+     A monotonically increasing token makes auto-clear safe: an older
+     timer can never wipe a newer message.
+  ------------------------------------------------------------------- */
+  let statusToken = 0;
+
+  function setStatus(msg, type = "", autoClearMs = 0) {
+    const token = ++statusToken;
     els.status.textContent = msg;
     els.status.className = "status" + (type ? " " + type : "");
-  };
+    if (autoClearMs > 0) {
+      setTimeout(() => {
+        if (token === statusToken) setStatus("");
+      }, autoClearMs);
+    }
+  }
+
+  /* ------------------------------ state ----------------------------- */
 
   const isCoolingDown = () => Date.now() < cooldownEnd;
 
-  const setLoading = () => {
-    els.btn.disabled = true;
+  function resetProgress() {
+    // Jump to 0 without animating backwards from 100%.
+    els.progress.style.transition = "none";
+    els.progress.style.width = "0%";
+    void els.progress.offsetWidth;
+    els.progress.style.transition = "";
+  }
+
+  function setLoading() {
+    // NOTE: we deliberately do NOT use the `disabled` attribute. A disabled
+    // element cannot hold focus, which would eject keyboard users mid-action.
+    // `aria-disabled` conveys the same state while remaining focusable.
+    els.btn.setAttribute("aria-disabled", "true");
     els.icon.textContent = "⏳";
-    els.icon.className = "spin";
+    els.icon.classList.add("spin");
     els.label.textContent = "Loading…";
-    els.progress.style.width = "0%";
+    resetProgress();
+    els.box.setAttribute("aria-busy", "true");
 
-    // Clear current so copying during load can't grab the previous quote
-    current = { text: "", author: "" };
+    if (current.text) {
+      // Keep the existing quote visible (dimmed) — avoids a jarring flash
+      // and avoids emptying the live region.
+      els.box.classList.add("is-loading");
+    } else {
+      els.skeleton.hidden = false;
+      els.text.textContent = "";
+      els.author.textContent = "";
+    }
 
-    els.box.classList.remove("animate");
-    els.text.innerHTML =
-      '<span class="skeleton" style="width:100%"></span>' +
-      '<span class="skeleton" style="width:70%"></span>';
-    els.author.textContent = "";
     setStatus("Fetching a fresh quote…");
-  };
+  }
 
-  const setReady = () => {
-    els.btn.disabled = false;
+  function setReady() {
+    els.btn.removeAttribute("aria-disabled");
     els.icon.textContent = "✨";
-    els.icon.className = "";
+    els.icon.classList.remove("spin");
     els.label.textContent = "New Quote";
-    els.progress.style.width = "0%";
-  };
+    resetProgress();
+    els.box.removeAttribute("aria-busy");
+    els.box.classList.remove("is-loading");
+    els.skeleton.hidden = true;
+  }
 
-  function startCooldown() {
+  function startCooldown(seconds) {
     clearInterval(cooldownTimer);
+    cooldownTimer = null;
 
-    cooldownEnd = Date.now() + COOLDOWN_SECONDS * 1000;
-    els.btn.disabled = true;
+    if (!(seconds > 0)) {
+      cooldownEnd = 0;
+      setReady();
+      return;
+    }
+
+    const total = seconds * 1000;
+    cooldownEnd = Date.now() + total;
+
+    els.btn.setAttribute("aria-disabled", "true");
     els.icon.textContent = "⏳";
-    els.icon.className = "";
-    els.progress.style.width = "0%";
+    els.icon.classList.remove("spin");
+    resetProgress();
 
     const tick = () => {
       const msLeft = cooldownEnd - Date.now();
@@ -363,55 +489,90 @@
         cooldownTimer = null;
         cooldownEnd = 0;
         setReady();
-        if (!els.status.classList.contains("error")) setStatus("");
+        // Intentionally do NOT clear the status line here — success/error
+        // messages manage their own lifetimes via setStatus tokens.
         return;
       }
 
-      const secsLeft = Math.ceil(msLeft / 1000);
-      els.label.textContent = `Wait ${secsLeft}s`;
-
-      const elapsed = COOLDOWN_SECONDS * 1000 - msLeft;
+      els.label.textContent = `Wait ${Math.ceil(msLeft / 1000)}s`;
       els.progress.style.width =
-        Math.min(100, (elapsed / (COOLDOWN_SECONDS * 1000)) * 100) + "%";
+        Math.min(100, ((total - msLeft) / total) * 100) + "%";
     };
 
     tick();
     cooldownTimer = setInterval(tick, 100);
   }
 
-  const render = (quote) => {
-    current = quote;
-    els.text.textContent = quote.text;
-    els.author.textContent = quote.author || "Unknown";
+  function render(quote) {
+    current = { text: quote.text, author: quote.author || "Unknown" };
+    els.text.textContent = current.text;
+    els.author.textContent = current.author;
+
+    els.skeleton.hidden = true;
+    els.box.classList.remove("is-loading");
+    els.box.setAttribute("aria-busy", "false");
 
     els.box.classList.remove("animate");
     void els.box.offsetWidth;
     els.box.classList.add("animate");
-  };
+  }
 
-  /* ---------------------------- Fetching ---------------------------- */
+  /* ---------------------------- fetching ---------------------------- */
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function fetchJson(url, timeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
-  async function tryApi(api) {
-    for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_API; attempt++) {
+  /**
+   * Try one API, up to MAX_ATTEMPTS_PER_API times, with exponential backoff.
+   * Returns a normalized quote object or null. Never throws.
+   */
+  async function tryApi(api, deadline) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_API; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 250) return null;
+
       try {
-        const res = await fetch(api.url, { headers: { Accept: "application/json" } });
-        if (!res.ok) throw new Error(`${api.name}: HTTP ${res.status}`);
+        const data = await fetchJson(api.url, Math.min(REQUEST_TIMEOUT_MS, remaining));
+        const parsed = api.parse(data);
 
-        const data = await res.json();
-        const quote = api.parse(data);
+        const text = String(parsed.text ?? "").trim();
+        if (!text) throw new Error("empty quote text");
 
-        if (!quote.text) throw new Error(`${api.name}: empty quote text`);
+        const author = String(parsed.author ?? "").trim() || "Unknown";
+        const key = parsed.id != null ? `${api.name}:${parsed.id}` : null;
 
-        if (quote.id === null || quote.id !== lastId) {
-          return quote;
+        // Best-effort de-duplication: try once more for a different quote,
+        // but accept a repeat rather than failing outright.
+        if (key && key === lastKey && attempt < MAX_ATTEMPTS_PER_API) {
+          await sleep(RETRY_BASE_DELAY_MS);
+          continue;
         }
 
-        await sleep(120);
+        return { text, author, key };
       } catch (err) {
-        console.warn(`[${api.name}] attempt ${attempt + 1} failed:`, err.message);
-        break;
+        console.warn(
+          `[${api.name}] attempt ${attempt}/${MAX_ATTEMPTS_PER_API} failed:`,
+          err && err.message ? err.message : err
+        );
+
+        if (attempt === MAX_ATTEMPTS_PER_API) break;
+
+        const backoff = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        if (Date.now() + backoff >= deadline) break;
+        await sleep(backoff);
       }
     }
     return null;
@@ -423,92 +584,122 @@
     isFetching = true;
     setLoading();
 
+    const deadline = Date.now() + TOTAL_BUDGET_MS;
+    let quote = null;
+
     try {
-      let quote = null;
       for (const api of API_ENDPOINTS) {
-        quote = await tryApi(api);
+        if (Date.now() >= deadline) break;
+        quote = await tryApi(api, deadline);
         if (quote) break;
       }
-
-      if (quote) {
-        lastId = quote.id;
-        render(quote);
-        setStatus("Quote loaded ✓", "success");
-      } else {
-        const fb = FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
-        render(fb);
-        setStatus("⚠ All APIs unreachable — showing a saved quote.", "error");
-      }
     } catch (err) {
-      console.error("Unexpected error:", err);
-      const fb = FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
-      render(fb);
-      setStatus("⚠ Unexpected error — showing a saved quote.", "error");
+      // Defensive: tryApi shouldn't throw, but never leave the UI stuck.
+      console.error("Unexpected error while fetching:", err);
+      quote = null;
+    }
+
+    if (quote) {
+      lastKey = quote.key;
+      render(quote);
+      setStatus("Quote loaded ✓", "success", 2500);
+    } else {
+      render(pickFallback());
+      setStatus("⚠ All quote services unreachable — showing a saved quote.", "error");
+    }
+
+    isFetching = false;
+    startCooldown(quote ? COOLDOWN_SECONDS : FAILURE_COOLDOWN_SEC);
+  }
+
+  /* ----------------------------- copying ---------------------------- */
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        /* fall through to legacy path */
+      }
+    }
+
+    const prevFocus = document.activeElement;
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "0";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
     } finally {
-      isFetching = false;
-      startCooldown();
+      // The textarea stole focus; hand it back so keyboard users aren't
+      // dropped onto <body>.
+      if (prevFocus && typeof prevFocus.focus === "function") {
+        prevFocus.focus();
+      }
     }
   }
 
-  /* ---------------------------- Actions ----------------------------- */
-
   async function copyQuote() {
+    if (isFetching && !current.text) {
+      setStatus("Still loading — one moment.", "", 2000);
+      return;
+    }
     if (!current.text) {
-      setStatus("Nothing to copy yet — load a quote first.", "error");
-      setTimeout(() => {
-        if (!isCoolingDown() && !els.status.classList.contains("error")) setStatus("");
-      }, 2000);
+      setStatus("Nothing to copy yet — load a quote first.", "error", 2500);
       return;
     }
 
     const payload = `"${current.text}" — ${current.author}`;
-
-    try {
-      await navigator.clipboard.writeText(payload);
-      setStatus("Copied to clipboard ✓", "success");
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = payload;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-      setStatus("Copied to clipboard ✓", "success");
-    }
-
-    setTimeout(() => {
-      if (!isCoolingDown() && !els.status.classList.contains("error")) setStatus("");
-    }, 2000);
+    const ok = await copyText(payload);
+    setStatus(
+      ok ? "Copied to clipboard ✓" : "Couldn’t copy — please copy manually.",
+      ok ? "success" : "error",
+      ok ? 2000 : 3000
+    );
   }
 
-  /* ---------------------------- Wiring ------------------------------ */
+  /* ----------------------------- wiring ----------------------------- */
 
-  els.btn.addEventListener("click", fetchQuote);
+  els.btn.addEventListener("click", () => {
+    // aria-disabled elements still fire click events, so guard manually.
+    if (els.btn.getAttribute("aria-disabled") === "true") return;
+    fetchQuote();
+  });
+
   els.copy.addEventListener("click", copyQuote);
 
-  /* Global shortcut: Space / Enter fires a new quote — but ONLY when the
-     focus isn't already on an interactive element (button, link, input,
-     textarea, select, or contenteditable). This keeps keyboard navigation
-     working: focusing the Copy button and pressing Enter/Space copies the
-     quote instead of being hijacked by this shortcut. */
+  /* Global shortcut: Space / Enter fires a new quote — but only when focus
+     is NOT on an interactive element, and not while a modifier is held. */
   document.addEventListener("keydown", (e) => {
-    if (e.code !== "Space" && e.key !== "Enter") return;
+    if (e.repeat) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    const isSpace = e.code === "Space" || e.key === " ";
+    const isEnter = e.key === "Enter";
+    if (!isSpace && !isEnter) return;
 
     const el = document.activeElement;
-    if (!el) return;
-
-    const tag = el.tagName;
+    const tag = el ? el.tagName : "";
     const isInteractive =
       tag === "BUTTON" ||
       tag === "A" ||
       tag === "INPUT" ||
       tag === "TEXTAREA" ||
       tag === "SELECT" ||
-      el.isContentEditable;
+      (el && el.isContentEditable);
 
     if (isInteractive) return;
+    if (isFetching || isCoolingDown()) return;
 
     e.preventDefault();
     fetchQuote();
